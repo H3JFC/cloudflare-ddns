@@ -1,0 +1,80 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  PACKAGE: cloudflare-ddns
+
+jobs:
+  build:
+    name: Build Ubuntu amd64 package
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            dpkg-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Validate version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION=$(grep '^version =' Cargo.toml | head -1 | cut -d '"' -f 2)
+
+          if [ "$TAG" != "$CARGO_VERSION" ]; then
+            echo "Git tag and Cargo version do not match"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Build Debian package
+        run: |
+          chmod +x packaging/build-deb.sh
+          ./packaging/build-deb.sh
+
+      - name: Validate Debian package
+        run: |
+          PACKAGE_FILE="build/output/${PACKAGE}_${GITHUB_REF_NAME#v}_amd64.deb"
+
+          dpkg-deb --info "$PACKAGE_FILE"
+          dpkg-deb --contents "$PACKAGE_FILE"
+
+          dpkg-deb --field "$PACKAGE_FILE" Package
+          dpkg-deb --field "$PACKAGE_FILE" Version
+          dpkg-deb --field "$PACKAGE_FILE" Architecture
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-ddns-amd64
+          path: build/output/*.deb
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: build/output/*.deb
+

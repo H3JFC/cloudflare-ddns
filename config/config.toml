@@ -1,0 +1,15 @@
+[cloudflare]
+zone_id = "your_zone_id"
+
+[[cloudflare.records]]
+record_id = "id_for_home"
+record_name = "home.example.com"
+
+[[cloudflare.records]]
+record_id = "id_for_vpn"
+record_name = "vpn.example.com"
+
+[ddns]
+interval_seconds = 300
+ip_check_url = "https://api.ipify.org"
+request_timeout_seconds = 10

@@ -1,0 +1,34 @@
+[Unit]
+Description=Cloudflare Dynamic DNS Client
+Documentation=https://github.com/h3jfc/cloudflare-ddns
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+
+User=cloudflare-ddns
+Group=cloudflare-ddns
+
+EnvironmentFile=/etc/cloudflare-ddns/cloudflare.env
+Environment=RUST_LOG=info
+
+ExecStart=/usr/bin/cloudflare-ddns
+
+Restart=always
+RestartSec=30
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target
