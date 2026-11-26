@@ -14,7 +14,7 @@ env:
 jobs:
   build:
     name: Build Ubuntu amd64 package
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout source
@@ -50,6 +50,14 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
 
+      - name: Verify package builder
+        run: |
+          bash -n packaging/build-deb.sh
+          test -f Cargo.toml
+          test -f Cargo.lock
+          test -f config/config.toml
+          test -f packaging/cloudflare-ddns.service
+
       - name: Build Debian package
         run: |
           chmod +x packaging/build-deb.sh
@@ -77,4 +85,3 @@ jobs:
         with:
           generate_release_notes: true
           files: build/output/*.deb
-
