@@ -26,3 +26,4 @@ Type: string
 Default: 300
 Description: Seconds between public IP checks:
  How often the service checks whether your public IP has changed.
+ Minimum 60 seconds; the default is 300.

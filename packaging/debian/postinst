@@ -50,6 +50,7 @@ if [ "$1" = "configure" ]; then
             done
             case "${INTERVAL}" in
                 ''|*[!0-9]*) VALID=0 ;;
+                *) [ "${INTERVAL}" -ge 60 ] || VALID=0 ;;
             esac
 
             if [ "${VALID}" -eq 1 ]; then
@@ -66,12 +67,26 @@ record_id = "${RECORD_ID}"
 record_name = "${RECORD_NAME}"
 
 [ddns]
-interval_seconds = ${INTERVAL}
-ip_check_url = "https://api.ipify.org"
+interval_seconds = ${INTERVAL}   # seconds between checks; minimum 60
 request_timeout_seconds = 10
+
+# Three independent public-IP sources, queried in order. DNS is updated as
+# soon as ANY TWO return the same IP (the third is skipped if the first two
+# agree). If no two agree, no update is made. Each must return just the IPv4
+# address as plain text.
+ip_check_url_1 = "https://api.ipify.org"
+ip_check_url_2 = "https://checkip.amazonaws.com"
+ip_check_url_3 = "https://ifconfig.me/ip"
+
+# Other compatible services you can swap in (all return a bare IP):
+#   https://icanhazip.com
+#   https://ipinfo.io/ip
+#   https://api.ipify.org
+#   https://checkip.amazonaws.com
+#   https://ifconfig.me/ip
 CONFEOF
             else
-                echo "cloudflare-ddns: one or more values were invalid (no spaces, quotes or '#'; interval must be a number)." >&2
+                echo "cloudflare-ddns: one or more values were invalid (no spaces, quotes or '#'; interval must be a number of at least 60 seconds)." >&2
             fi
         fi
 

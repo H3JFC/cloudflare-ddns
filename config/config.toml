@@ -10,6 +10,20 @@ record_id = "id_for_vpn"
 record_name = "vpn.example.com"
 
 [ddns]
-interval_seconds = 300
-ip_check_url = "https://api.ipify.org"
+interval_seconds = 300   # seconds between checks; minimum 60
 request_timeout_seconds = 10
+
+# Three independent public-IP sources, queried in order. DNS is updated as
+# soon as ANY TWO return the same IP (the third is skipped if the first two
+# agree). If no two agree, no update is made. Each must return just the IPv4
+# address as plain text.
+ip_check_url_1 = "https://api.ipify.org"
+ip_check_url_2 = "https://checkip.amazonaws.com"
+ip_check_url_3 = "https://ifconfig.me/ip"
+
+# Other compatible services you can swap in (all return a bare IP):
+#   https://icanhazip.com
+#   https://ipinfo.io/ip
+#   https://api.ipify.org
+#   https://checkip.amazonaws.com
+#   https://ifconfig.me/ip

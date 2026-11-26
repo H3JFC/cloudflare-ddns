@@ -7,7 +7,7 @@ A lightweight Cloudflare Dynamic DNS client for Linux. It polls your public IPv4
 - Ubuntu / Debian on **amd64** with systemd (the package depends on `libc6 >= 2.35`; Ubuntu 22.04+ or Debian 12+ is recommended)
 - `sudo` access
 - A Cloudflare account with a zone (domain) and at least one **existing `A` record** to keep updated
-- Outbound HTTPS access to `api.cloudflare.com` and to the IP-check URL (default `https://api.ipify.org`)
+- Outbound HTTPS access to `api.cloudflare.com` and to the IP-check URLs (defaults: `https://api.ipify.org`, `https://checkip.amazonaws.com`, `https://ifconfig.me/ip`)
 
 ## Before you install
 
@@ -86,7 +86,7 @@ The installer also creates a `cloudflare-ddns` system user and group that the se
 | Zone ID | `zone_id` in `/etc/cloudflare-ddns/config.toml` |
 | DNS record ID | `record_id` in `config.toml` |
 | DNS record name | `record_name` in `config.toml` |
-| Seconds between IP checks (default `300`) | `interval_seconds` in `config.toml` |
+| Seconds between IP checks (default `300`, **minimum `60`**) | `interval_seconds` in `config.toml` |
 
 Values may not contain spaces, quotes or `#`. The prompt covers one record; to update more, add further `[[cloudflare.records]]` blocks afterwards (see step 5) and restart.
 
@@ -129,10 +129,33 @@ record_id = "id_for_vpn"
 record_name = "vpn.example.com"
 
 [ddns]
-interval_seconds = 300                      # how often to check your public IP
-ip_check_url = "https://api.ipify.org"      # must return your public IPv4 as plain text
+interval_seconds = 300                      # how often to check your public IP (minimum 60)
 request_timeout_seconds = 10                # timeout for each HTTP request
+
+# Three independent public-IP sources. DNS is updated once ANY TWO agree.
+# Each must return just the IPv4 address as plain text.
+ip_check_url_1 = "https://api.ipify.org"
+ip_check_url_2 = "https://checkip.amazonaws.com"
+ip_check_url_3 = "https://ifconfig.me/ip"
 ```
+
+#### Public IP sources (`ip_check_url_1` / `_2` / `_3`)
+
+The daemon queries the three services **in order** and updates DNS as soon as **any two** return the same IPv4 address. If the first two agree, the third is never contacted. If they disagree (or one fails), the third breaks the tie. This protects you if one service is compromised or returns a bad answer: a single liar cannot repoint your records. Each URL must be `https://`, all three must be different, and each must return nothing but the IP as plain text (responses over 64 bytes are rejected).
+
+Known-compatible services you can swap in:
+
+| URL | Notes |
+| --- | --- |
+| `https://api.ipify.org` | Default for source 1 |
+| `https://checkip.amazonaws.com` | Default for source 2 |
+| `https://ifconfig.me/ip` | Default for source 3 |
+| `https://icanhazip.com` | |
+| `https://ipinfo.io/ip` | |
+
+The check fails closed: if no two sources agree (for example all three differ, or two are unreachable), that check is skipped, an error is logged, and DNS is left unchanged until the next interval. One source being down is tolerated. Test a service yourself with `curl -4 <url>`; it should print only an IP address.
+
+The old single `ip_check_url` setting still works for existing installs (it is used as `ip_check_url_1` and a warning is logged), but it is deprecated. Add `ip_check_url_1`, `ip_check_url_2` and `ip_check_url_3` to `config.toml` and restart the service.
 
 Then set the API token:
 
@@ -220,9 +243,11 @@ sudo apt purge cloudflare-ddns       # also removes config files, including your
 | Symptom | Likely cause / fix |
 | --- | --- |
 | `Fatal startup error: CLOUDFLARE_API_TOKEN is not configured` | `cloudflare.env` is empty or has the wrong format. Fix it and restart. |
+| `Fatal startup error: interval_seconds must be at least 60` | The polling interval is below the 60-second minimum. Raise it and restart. |
 | `Fatal startup error` about config or `zone_id` | Placeholder values still in `config.toml`, or a TOML syntax error. |
 | Service restarts every 30 seconds | Startup is failing (the unit uses `Restart=always`). Read `journalctl -u cloudflare-ddns -n 50`. |
 | `DDNS check failed` with an authentication / permission error | Token lacks **Zone → DNS → Edit**, or is scoped to a different zone. |
+| `No 2 IP sources agreed` or `IP check failed for …` in the logs | Fewer than two IP services returned the same address (disagreement, or several unreachable/slow). Updates pause until two agree. Try different sources (see *Public IP sources*). |
 | Record not found / wrong type | `record_id` is wrong, or the record is not an `A` record. Re-run the record lookup in step 4. |
 | `Permission denied` reading config | Ownership or mode changed. Run `sudo chown root:cloudflare-ddns /etc/cloudflare-ddns/* && sudo chmod 640 /etc/cloudflare-ddns/*`. |
 
