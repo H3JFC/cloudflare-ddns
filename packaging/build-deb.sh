@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Project root directory
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 VERSION="$(grep '^version =' "${ROOT}/Cargo.toml" | head -1 | cut -d '"' -f 2)"
+
 ARCH="amd64"
 PACKAGE="cloudflare-ddns"
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STAGE="${ROOT}/build/package"
 OUTPUT="${ROOT}/build/output"
 
 echo "Building ${PACKAGE} ${VERSION}"
+echo "Project root: ${ROOT}"
 
 # Compile release binary.
 cd "${ROOT}"
