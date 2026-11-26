@@ -344,7 +344,7 @@ fn run() -> Result<()> {
 
     let client = Client::builder()
         .timeout(Duration::from_secs(config.ddns.request_timeout_seconds))
-        .user_agent("cloudflare-ddns/1.0.0")
+        .user_agent(concat!("cloudflare-ddns/", env!("CARGO_PKG_VERSION")))
         .build()?;
 
     info!("Cloudflare DDNS daemon started");
