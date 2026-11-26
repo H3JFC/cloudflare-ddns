@@ -88,12 +88,11 @@ dependencies = [
 
 [[package]]
 name = "cloudflare-ddns"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "reqwest",
  "serde",
- "serde_json",
  "toml",
  "tracing",
  "tracing-subscriber",
