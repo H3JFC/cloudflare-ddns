@@ -26,7 +26,8 @@ jobs:
           sudo apt-get install -y \
             build-essential \
             pkg-config \
-            dpkg-dev
+            dpkg-dev \
+            shellcheck
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -53,6 +54,10 @@ jobs:
       - name: Verify package builder
         run: |
           bash -n packaging/build-deb.sh
+          shellcheck packaging/debian/config packaging/debian/postinst \
+            packaging/debian/prerm packaging/debian/postrm
+          test -f packaging/debian/control.in
+          test -f packaging/debian/templates
           test -f Cargo.toml
           test -f Cargo.lock
           test -f config/config.toml

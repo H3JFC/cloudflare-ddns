@@ -1,0 +1,109 @@
+#!/bin/sh
+set -e
+
+# shellcheck source=/dev/null
+. /usr/share/debconf/confmodule
+
+CONF_DIR=/etc/cloudflare-ddns
+CONF_FILE="${CONF_DIR}/config.toml"
+ENV_FILE="${CONF_DIR}/cloudflare.env"
+
+# Reject values that would break TOML strings or the env file.
+safe() {
+    case "$1" in
+        *\"*|*\\*|*\'*|*" "*|*"#"*) return 1 ;;
+    esac
+    # No control characters / newlines.
+    [ "$(printf '%s' "$1" | tr -d '[:print:]' | wc -c)" -eq 0 ]
+}
+
+if [ "$1" = "configure" ]; then
+    if ! getent group cloudflare-ddns >/dev/null; then
+        addgroup --system cloudflare-ddns
+    fi
+
+    if ! getent passwd cloudflare-ddns >/dev/null; then
+        adduser --system \
+            --ingroup cloudflare-ddns \
+            --no-create-home \
+            --home /nonexistent \
+            --shell /usr/sbin/nologin \
+            cloudflare-ddns
+    fi
+
+    mkdir -p "${CONF_DIR}"
+    chown root:cloudflare-ddns "${CONF_DIR}"
+    chmod 750 "${CONF_DIR}"
+
+    if [ ! -s "${CONF_FILE}" ] || [ ! -s "${ENV_FILE}" ]; then
+        db_get cloudflare-ddns/api_token;       TOKEN="$RET"
+        db_get cloudflare-ddns/zone_id;         ZONE_ID="$RET"
+        db_get cloudflare-ddns/record_id;       RECORD_ID="$RET"
+        db_get cloudflare-ddns/record_name;     RECORD_NAME="$RET"
+        db_get cloudflare-ddns/interval_seconds; INTERVAL="$RET"
+        [ -n "${INTERVAL}" ] || INTERVAL=300
+
+        if [ -n "${TOKEN}" ] && [ -n "${ZONE_ID}" ] && [ -n "${RECORD_ID}" ] && [ -n "${RECORD_NAME}" ]; then
+            VALID=1
+            for v in "${TOKEN}" "${ZONE_ID}" "${RECORD_ID}" "${RECORD_NAME}" "${INTERVAL}"; do
+                safe "$v" || VALID=0
+            done
+            case "${INTERVAL}" in
+                ''|*[!0-9]*) VALID=0 ;;
+            esac
+
+            if [ "${VALID}" -eq 1 ]; then
+                umask 077
+                cat > "${ENV_FILE}" <<ENVEOF
+CLOUDFLARE_API_TOKEN=${TOKEN}
+ENVEOF
+                cat > "${CONF_FILE}" <<CONFEOF
+[cloudflare]
+zone_id = "${ZONE_ID}"
+
+[[cloudflare.records]]
+record_id = "${RECORD_ID}"
+record_name = "${RECORD_NAME}"
+
+[ddns]
+interval_seconds = ${INTERVAL}
+ip_check_url = "https://api.ipify.org"
+request_timeout_seconds = 10
+CONFEOF
+            else
+                echo "cloudflare-ddns: one or more values were invalid (no spaces, quotes or '#'; interval must be a number)." >&2
+            fi
+        fi
+
+        # Do not keep the token in the debconf database.
+        db_set cloudflare-ddns/api_token "" || true
+        db_fset cloudflare-ddns/api_token seen false || true
+    fi
+
+    # Enforce ownership/permissions on whatever exists.
+    for f in "${CONF_FILE}" "${ENV_FILE}"; do
+        if [ -e "$f" ]; then
+            chown root:cloudflare-ddns "$f"
+            chmod 640 "$f"
+        fi
+    done
+
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload || true
+
+        if [ -s "${CONF_FILE}" ] && [ -s "${ENV_FILE}" ] && grep -q '^CLOUDFLARE_API_TOKEN=.' "${ENV_FILE}"; then
+            systemctl enable cloudflare-ddns.service || true
+            # restart covers both first start and upgrades.
+            systemctl restart cloudflare-ddns.service || true
+            echo "Cloudflare DDNS configured, enabled and started."
+        else
+            echo "Cloudflare DDNS installed but NOT configured."
+            echo "Create ${CONF_FILE} and ${ENV_FILE}, then run:"
+            echo "  sudo systemctl enable --now cloudflare-ddns"
+            echo "Example config: /usr/share/doc/cloudflare-ddns/config.example.toml"
+        fi
+    fi
+fi
+
+db_stop || true
+exit 0

@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
+
+if [ "$1" = "purge" ]; then
+    rm -rf /etc/cloudflare-ddns
+
+    if [ -e /usr/share/debconf/confmodule ]; then
+        # shellcheck source=/dev/null
+        . /usr/share/debconf/confmodule
+        db_purge || true
+    fi
+fi
+
+exit 0

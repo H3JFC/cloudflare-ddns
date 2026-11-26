@@ -1,0 +1,9 @@
+Package: @PACKAGE@
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: @ARCH@
+Depends: libc6 (>= 2.35), debconf (>= 0.5) | debconf-2.0
+Maintainer: Hector Friedman-Cintron hector.friedman.cintron@gmail.com
+Description: Cloudflare Dynamic DNS updater
+ Lightweight Rust-based Dynamic DNS client for Ubuntu.
