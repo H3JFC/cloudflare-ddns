@@ -10,16 +10,11 @@ Type: string
 Description: Cloudflare Zone ID:
  Found on the Overview page of your domain in the Cloudflare dashboard.
 
-Template: cloudflare-ddns/record_id
-Type: string
-Description: DNS record ID:
- ID of an existing A record to keep updated. It can be listed with the
- Cloudflare API (GET /zones/<zone_id>/dns_records?type=A).
-
 Template: cloudflare-ddns/record_name
 Type: string
 Description: DNS record name:
- Fully qualified name of that record, for example home.example.com.
+ Fully qualified name of an existing A record to keep updated, for example
+ home.example.com.
 
 Template: cloudflare-ddns/interval_seconds
 Type: string

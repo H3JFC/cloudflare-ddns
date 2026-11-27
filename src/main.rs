@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::Read;
@@ -21,11 +21,11 @@ const DEFAULT_IP_CHECK_URL_1: &str = "https://api.ipify.org";
 const DEFAULT_IP_CHECK_URL_2: &str = "https://checkip.amazonaws.com";
 const DEFAULT_IP_CHECK_URL_3: &str = "https://ifconfig.me/ip";
 
-/// Number of sources that must report the same IP before DNS is updated.
 /// Lowest allowed polling interval. Prevents hammering the IP-check services
 /// and the Cloudflare API.
 const MIN_INTERVAL_SECONDS: u64 = 60;
 
+/// Number of sources that must report the same IP before DNS is updated.
 const REQUIRED_AGREEMENT: usize = 2;
 
 #[derive(Debug, Deserialize)]
@@ -42,7 +42,6 @@ struct CloudflareConfig {
 
 #[derive(Debug, Deserialize)]
 struct RecordConfig {
-    record_id: String,
     record_name: String,
 }
 
@@ -121,19 +120,17 @@ fn validate_config(config: &Config) -> Result<()> {
         return Err(anyhow!("At least one DNS record must be configured"));
     }
 
-    let mut seen_ids = HashSet::new();
+    let mut seen_names = HashSet::new();
 
     for record in &config.cloudflare.records {
-        if record.record_id.trim().is_empty() || record.record_name.trim().is_empty() {
-            return Err(anyhow!(
-                "Cloudflare record configuration contains empty values"
-            ));
+        if record.record_name.trim().is_empty() {
+            return Err(anyhow!("Cloudflare record_name must not be empty"));
         }
 
-        if !seen_ids.insert(record.record_id.as_str()) {
+        if !seen_names.insert(record.record_name.trim().to_ascii_lowercase()) {
             return Err(anyhow!(
-                "Duplicate record_id in config: {}",
-                record.record_id
+                "Duplicate record_name in config: {}",
+                record.record_name
             ));
         }
     }
@@ -206,11 +203,7 @@ fn validate_ipv4(value: &str) -> Result<Ipv4Addr> {
     Ok(ip)
 }
 
-fn validate_record(record: &DnsRecord, expected_id: &str, expected_name: &str) -> Result<()> {
-    if record.id != expected_id {
-        return Err(anyhow!("Cloudflare returned an unexpected record ID"));
-    }
-
+fn validate_record(record: &DnsRecord, expected_name: &str) -> Result<()> {
     if !record.name.eq_ignore_ascii_case(expected_name) {
         return Err(anyhow!(
             "DNS record name mismatch: expected {}, received {}",
@@ -300,13 +293,8 @@ fn resolve_public_ip(client: &Client, urls: &[&str]) -> Result<Ipv4Addr> {
     resolve_with(urls, |url| fetch_ip(client, url))
 }
 
-/// Fetches every A record in the zone with a single GET request and
-/// returns them keyed by record ID.
-fn get_dns_records(
-    client: &Client,
-    token: &str,
-    zone_id: &str,
-) -> Result<HashMap<String, DnsRecord>> {
+/// Fetches every A record in the zone with a single GET request.
+fn get_dns_records(client: &Client, token: &str, zone_id: &str) -> Result<Vec<DnsRecord>> {
     // per_page is raised well above the default of 100 so that the whole
     // zone fits in one response.
     let url = format!(
@@ -327,26 +315,42 @@ fn get_dns_records(
         return Err(anyhow!("Cloudflare API error: {}", messages.join("; ")));
     }
 
-    let records = data
-        .result
-        .ok_or_else(|| anyhow!("Cloudflare returned no DNS records"))?;
+    data.result
+        .ok_or_else(|| anyhow!("Cloudflare returned no DNS records"))
+}
 
-    Ok(records
-        .into_iter()
-        .map(|record| (record.id.clone(), record))
-        .collect())
+/// Finds the single A record with the given name. Names are matched
+/// case-insensitively. Errors if there is no such record, or more than one
+/// (e.g. round-robin A records), since the right one to update is ambiguous.
+fn find_record<'a>(records: &'a [DnsRecord], name: &str) -> Result<&'a DnsRecord> {
+    let mut matches = records
+        .iter()
+        .filter(|r| r.record_type == "A" && r.name.eq_ignore_ascii_case(name.trim()));
+
+    let first = matches
+        .next()
+        .ok_or_else(|| anyhow!("No A record named {} found in the Cloudflare zone", name))?;
+
+    if matches.next().is_some() {
+        return Err(anyhow!(
+            "Multiple A records named {} exist; refusing to guess which one to update",
+            name
+        ));
+    }
+
+    Ok(first)
 }
 
 fn update_dns(
     client: &Client,
     token: &str,
     zone_id: &str,
-    record_config: &RecordConfig,
+    record: &DnsRecord,
     ip: Ipv4Addr,
 ) -> Result<()> {
     let url = format!(
         "{}/zones/{}/dns_records/{}",
-        CLOUDFLARE_API, zone_id, record_config.record_id
+        CLOUDFLARE_API, zone_id, record.id
     );
 
     // PATCH changes only the content field.
@@ -376,20 +380,17 @@ fn update_dns(
         .result
         .ok_or_else(|| anyhow!("Cloudflare returned no updated record"))?;
 
-    validate_record(
-        &updated,
-        &record_config.record_id,
-        &record_config.record_name,
-    )?;
+    if updated.id != record.id {
+        return Err(anyhow!("Cloudflare returned an unexpected record ID"));
+    }
+
+    validate_record(&updated, &record.name)?;
 
     if updated.content != ip.to_string() {
         return Err(anyhow!("Cloudflare update verification failed"));
     }
 
-    info!(
-        "Successfully updated {} to {}",
-        record_config.record_name, ip
-    );
+    info!("Successfully updated {} to {}", record.name, ip);
 
     Ok(())
 }
@@ -399,18 +400,12 @@ fn process_record(
     token: &str,
     zone_id: &str,
     record_config: &RecordConfig,
-    dns_records: &HashMap<String, DnsRecord>,
+    dns_records: &[DnsRecord],
     public_ip: Ipv4Addr,
 ) -> Result<()> {
-    let record = dns_records.get(&record_config.record_id).ok_or_else(|| {
-        anyhow!(
-            "A record not found in Cloudflare zone: {} ({})",
-            record_config.record_name,
-            record_config.record_id
-        )
-    })?;
+    let record = find_record(dns_records, &record_config.record_name)?;
 
-    validate_record(record, &record_config.record_id, &record_config.record_name)?;
+    validate_record(record, &record_config.record_name)?;
 
     let dns_ip = validate_ipv4(&record.content)?;
 
@@ -428,7 +423,7 @@ fn process_record(
         record_config.record_name, dns_ip, public_ip
     );
 
-    update_dns(client, token, zone_id, record_config, public_ip)
+    update_dns(client, token, zone_id, record, public_ip)
 }
 
 fn check_and_update(client: &Client, config: &Config, token: &str) -> Result<()> {
@@ -534,14 +529,13 @@ mod tests {
         }
     }
 
-    fn config_with(records: Vec<(&str, &str)>) -> Config {
+    fn config_with(records: Vec<&str>) -> Config {
         Config {
             cloudflare: CloudflareConfig {
                 zone_id: "zone123".into(),
                 records: records
                     .into_iter()
-                    .map(|(id, name)| RecordConfig {
-                        record_id: id.into(),
+                    .map(|name| RecordConfig {
                         record_name: name.into(),
                     })
                     .collect(),
@@ -575,24 +569,24 @@ mod tests {
     #[test]
     fn accepts_correct_record() {
         let r = record("record123", "home.example.com", "A");
-        assert!(validate_record(&r, "record123", "home.example.com").is_ok());
+        assert!(validate_record(&r, "home.example.com").is_ok());
     }
 
     #[test]
     fn rejects_wrong_record_name() {
         let r = record("record123", "other.example.com", "A");
-        assert!(validate_record(&r, "record123", "home.example.com").is_err());
+        assert!(validate_record(&r, "home.example.com").is_err());
     }
 
     #[test]
     fn rejects_wrong_record_type() {
         let r = record("record123", "home.example.com", "AAAA");
-        assert!(validate_record(&r, "record123", "home.example.com").is_err());
+        assert!(validate_record(&r, "home.example.com").is_err());
     }
 
     #[test]
     fn accepts_valid_multi_record_config() {
-        let config = config_with(vec![("id1", "a.example.com"), ("id2", "b.example.com")]);
+        let config = config_with(vec!["a.example.com", "b.example.com"]);
         assert!(validate_config(&config).is_ok());
     }
 
@@ -603,14 +597,65 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_record_ids() {
-        let config = config_with(vec![("id1", "a.example.com"), ("id1", "b.example.com")]);
+    fn rejects_duplicate_record_names() {
+        let config = config_with(vec!["a.example.com", "A.Example.com"]);
         assert!(validate_config(&config).is_err());
     }
 
     #[test]
+    fn find_record_matches_by_name_case_insensitively() {
+        let records = vec![
+            record("id_a", "a.example.com", "A"),
+            record("id_b", "b.example.com", "A"),
+        ];
+        assert_eq!(find_record(&records, "B.Example.com").unwrap().id, "id_b");
+    }
+
+    #[test]
+    fn find_record_errors_when_missing() {
+        let records = vec![record("id_a", "a.example.com", "A")];
+        assert!(find_record(&records, "missing.example.com").is_err());
+    }
+
+    #[test]
+    fn find_record_errors_on_duplicate_names() {
+        let records = vec![
+            record("id_1", "rr.example.com", "A"),
+            record("id_2", "rr.example.com", "A"),
+        ];
+        let err = find_record(&records, "rr.example.com").unwrap_err();
+        assert!(err.to_string().contains("Multiple A records"));
+    }
+
+    #[test]
+    fn find_record_ignores_non_a_records() {
+        let records = vec![record("id_1", "a.example.com", "AAAA")];
+        assert!(find_record(&records, "a.example.com").is_err());
+    }
+
+    #[test]
+    fn legacy_record_id_in_config_is_ignored() {
+        let toml_src = r#"
+            [cloudflare]
+            zone_id = "zone123"
+
+            [[cloudflare.records]]
+            record_id = "old_id"
+            record_name = "a.example.com"
+
+            [ddns]
+            interval_seconds = 300
+            request_timeout_seconds = 10
+        "#;
+
+        let config: Config = toml::from_str(toml_src).unwrap();
+        assert_eq!(config.cloudflare.records[0].record_name, "a.example.com");
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
     fn rejects_empty_record_values() {
-        let config = config_with(vec![("id1", "  ")]);
+        let config = config_with(vec!["  "]);
         assert!(validate_config(&config).is_err());
     }
 
@@ -621,11 +666,9 @@ mod tests {
             zone_id = "zone123"
 
             [[cloudflare.records]]
-            record_id = "id1"
             record_name = "a.example.com"
 
             [[cloudflare.records]]
-            record_id = "id2"
             record_name = "b.example.com"
 
             [ddns]
@@ -648,7 +691,6 @@ mod tests {
             zone_id = "zone123"
 
             [[cloudflare.records]]
-            record_id = "id1"
             record_name = "a.example.com"
 
             [ddns]
@@ -670,7 +712,6 @@ mod tests {
             zone_id = "zone123"
 
             [[cloudflare.records]]
-            record_id = "id1"
             record_name = "a.example.com"
 
             [ddns]
@@ -688,7 +729,7 @@ mod tests {
 
     #[test]
     fn rejects_interval_below_minimum() {
-        let mut config = config_with(vec![("id1", "a.example.com")]);
+        let mut config = config_with(vec!["a.example.com"]);
         config.ddns.interval_seconds = MIN_INTERVAL_SECONDS - 1;
         assert!(validate_config(&config).is_err());
         config.ddns.interval_seconds = 0;
@@ -697,28 +738,28 @@ mod tests {
 
     #[test]
     fn accepts_minimum_interval() {
-        let mut config = config_with(vec![("id1", "a.example.com")]);
+        let mut config = config_with(vec!["a.example.com"]);
         config.ddns.interval_seconds = MIN_INTERVAL_SECONDS;
         assert!(validate_config(&config).is_ok());
     }
 
     #[test]
     fn rejects_non_https_ip_url() {
-        let mut config = config_with(vec![("id1", "a.example.com")]);
+        let mut config = config_with(vec!["a.example.com"]);
         config.ddns.ip_check_url_2 = "http://example.org/ip".into();
         assert!(validate_config(&config).is_err());
     }
 
     #[test]
     fn rejects_identical_ip_urls() {
-        let mut config = config_with(vec![("id1", "a.example.com")]);
+        let mut config = config_with(vec!["a.example.com"]);
         config.ddns.ip_check_url_2 = config.ddns.ip_check_url_1.clone();
         assert!(validate_config(&config).is_err());
     }
 
     #[test]
     fn rejects_identical_third_ip_url() {
-        let mut config = config_with(vec![("id1", "a.example.com")]);
+        let mut config = config_with(vec!["a.example.com"]);
         config.ddns.ip_check_url_3 = config.ddns.ip_check_url_2.clone();
         assert!(validate_config(&config).is_err());
     }

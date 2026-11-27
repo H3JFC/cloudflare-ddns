@@ -11,7 +11,6 @@ fi
 
 db_input high cloudflare-ddns/api_token || true
 db_input high cloudflare-ddns/zone_id || true
-db_input high cloudflare-ddns/record_id || true
 db_input high cloudflare-ddns/record_name || true
 db_input medium cloudflare-ddns/interval_seconds || true
 db_go || true

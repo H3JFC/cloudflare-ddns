@@ -20,33 +20,19 @@ The installer asks for these values, so gather them first.
 3. Under **Zone Resources**, restrict it to the specific zone you are updating (**Include → Specific zone**).
 4. Create the token and copy it. It is only shown once.
 
-### 2. Find your Zone ID and Record IDs
+### 2. Find your Zone ID and record name
 
 - **Zone ID:** in the Cloudflare dashboard, open your domain and find *Zone ID* in the right-hand sidebar of the **Overview** page.
-- **Record IDs:** the dashboard does not display these, so query the API:
-
-```bash
-# Replace with your token and zone ID
-export CLOUDFLARE_API_TOKEN="your_token"
-ZONE_ID="your_zone_id"
-
-curl -s -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-  "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records?type=A" \
-  | grep -o '"id":"[^"]*","name":"[^"]*"'
-```
-
-(With `jq` installed: `... | jq -r '.result[] | "\(.id)  \(.name)"'`.)
-
-Each record you list in the config must already exist as an `A` record. The daemon only changes its IP content; it does not create records.
+- **Record name:** the fully qualified name of an **existing `A` record** you want kept up to date, for example `home.example.com`. The daemon finds the record by name each cycle, so you do not need any record IDs.
 
 ## Install from a release
 
-Releases are published at <https://github.com/h3jfc/cloudflare-ddns/releases>. The current release is [v0.1.8](https://github.com/h3jfc/cloudflare-ddns/releases/tag/v0.1.8). Package files are named `cloudflare-ddns_<version>_amd64.deb`.
+Releases are published at <https://github.com/h3jfc/cloudflare-ddns/releases>. The current release is [v0.3.0](https://github.com/h3jfc/cloudflare-ddns/releases/tag/v0.3.0). Package files are named `cloudflare-ddns_<version>_amd64.deb`.
 
 ### 3. Download the package
 
 ```bash
-VERSION=0.1.8
+VERSION=0.3.0
 wget "https://github.com/h3jfc/cloudflare-ddns/releases/download/v${VERSION}/cloudflare-ddns_${VERSION}_amd64.deb"
 ```
 
@@ -84,7 +70,6 @@ The installer also creates a `cloudflare-ddns` system user and group that the se
 | --- | --- |
 | Cloudflare API token | `CLOUDFLARE_API_TOKEN` in `/etc/cloudflare-ddns/cloudflare.env` |
 | Zone ID | `zone_id` in `/etc/cloudflare-ddns/config.toml` |
-| DNS record ID | `record_id` in `config.toml` |
 | DNS record name | `record_name` in `config.toml` |
 | Seconds between IP checks (default `300`, **minimum `60`**) | `interval_seconds` in `config.toml` |
 
@@ -100,7 +85,6 @@ Pre-seed the answers with `debconf-set-selections`, then install non-interactive
 sudo debconf-set-selections <<EOF
 cloudflare-ddns cloudflare-ddns/api_token password YOUR_TOKEN
 cloudflare-ddns cloudflare-ddns/zone_id string YOUR_ZONE_ID
-cloudflare-ddns cloudflare-ddns/record_id string YOUR_RECORD_ID
 cloudflare-ddns cloudflare-ddns/record_name string home.example.com
 cloudflare-ddns cloudflare-ddns/interval_seconds string 300
 EOF
@@ -119,13 +103,12 @@ sudo nano /etc/cloudflare-ddns/config.toml
 [cloudflare]
 zone_id = "your_zone_id"
 
-# One [[cloudflare.records]] block per A record to keep updated
+# One [[cloudflare.records]] block per A record to keep updated. The record is
+# found by name; there are no record IDs to look up.
 [[cloudflare.records]]
-record_id = "id_for_home"
 record_name = "home.example.com"
 
 [[cloudflare.records]]
-record_id = "id_for_vpn"
 record_name = "vpn.example.com"
 
 [ddns]
@@ -229,6 +212,8 @@ sudo apt install "./cloudflare-ddns_${VERSION}_amd64.deb"
 sudo systemctl restart cloudflare-ddns
 ```
 
+Existing configs that still contain `record_id` lines keep working: the field is ignored and records are matched by `record_name`. You can delete those lines.
+
 Your existing files in `/etc/cloudflare-ddns/` are left untouched and you are not prompted again. The installer restarts the service automatically so the new binary is running (the explicit `restart` above is harmless).
 
 ## Uninstall
@@ -248,7 +233,8 @@ sudo apt purge cloudflare-ddns       # also removes config files, including your
 | Service restarts every 30 seconds | Startup is failing (the unit uses `Restart=always`). Read `journalctl -u cloudflare-ddns -n 50`. |
 | `DDNS check failed` with an authentication / permission error | Token lacks **Zone → DNS → Edit**, or is scoped to a different zone. |
 | `No 2 IP sources agreed` or `IP check failed for …` in the logs | Fewer than two IP services returned the same address (disagreement, or several unreachable/slow). Updates pause until two agree. Try different sources (see *Public IP sources*). |
-| Record not found / wrong type | `record_id` is wrong, or the record is not an `A` record. Re-run the record lookup in step 4. |
+| `No A record named … found` | `record_name` is misspelled, or the record is not an `A` record (the daemon never creates records). |
+| `Multiple A records named …` | The zone has more than one `A` record with that name (e.g. round-robin). The daemon refuses to guess; remove the extras in Cloudflare. |
 | `Permission denied` reading config | Ownership or mode changed. Run `sudo chown root:cloudflare-ddns /etc/cloudflare-ddns/* && sudo chmod 640 /etc/cloudflare-ddns/*`. |
 
 ## Building from source

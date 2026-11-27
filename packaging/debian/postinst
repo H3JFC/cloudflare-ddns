@@ -38,14 +38,13 @@ if [ "$1" = "configure" ]; then
     if [ ! -s "${CONF_FILE}" ] || [ ! -s "${ENV_FILE}" ]; then
         db_get cloudflare-ddns/api_token;       TOKEN="$RET"
         db_get cloudflare-ddns/zone_id;         ZONE_ID="$RET"
-        db_get cloudflare-ddns/record_id;       RECORD_ID="$RET"
         db_get cloudflare-ddns/record_name;     RECORD_NAME="$RET"
         db_get cloudflare-ddns/interval_seconds; INTERVAL="$RET"
         [ -n "${INTERVAL}" ] || INTERVAL=300
 
-        if [ -n "${TOKEN}" ] && [ -n "${ZONE_ID}" ] && [ -n "${RECORD_ID}" ] && [ -n "${RECORD_NAME}" ]; then
+        if [ -n "${TOKEN}" ] && [ -n "${ZONE_ID}" ] && [ -n "${RECORD_NAME}" ]; then
             VALID=1
-            for v in "${TOKEN}" "${ZONE_ID}" "${RECORD_ID}" "${RECORD_NAME}" "${INTERVAL}"; do
+            for v in "${TOKEN}" "${ZONE_ID}" "${RECORD_NAME}" "${INTERVAL}"; do
                 safe "$v" || VALID=0
             done
             case "${INTERVAL}" in
@@ -63,7 +62,6 @@ ENVEOF
 zone_id = "${ZONE_ID}"
 
 [[cloudflare.records]]
-record_id = "${RECORD_ID}"
 record_name = "${RECORD_NAME}"
 
 [ddns]
